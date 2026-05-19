@@ -5,16 +5,19 @@ from typing import List, Dict, Any, Tuple
 import psycopg2
 from psycopg2.extras import execute_values
 
-SCHEMA_SQL = open(
-    os.path.join(os.path.dirname(__file__), 'schema.sql'),
-    encoding='utf-8'
-).read()
+# Verifica que exista el archivo schema.sql en la misma carpeta
+schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+try:
+    SCHEMA_SQL = open(schema_path, encoding='utf-8').read()
+except FileNotFoundError:
+    print("⚠️ ADVERTENCIA: No se encontró schema.sql. Se asume que las tablas ya existen.")
+    SCHEMA_SQL = ""
 
 
 def connect_db():
     url = os.getenv('DATABASE_URL')
     if not url:
-        raise RuntimeError('Falta DATABASE_URL. Usá la cadena de conexión de Supabase/Postgres.')
+        raise RuntimeError('Falta DATABASE_URL. Asegurate de tenerla en GitHub Secrets o en tu .env local.')
     return psycopg2.connect(
         url,
         sslmode="require"
@@ -22,6 +25,8 @@ def connect_db():
 
 
 def ensure_schema(conn):
+    if not SCHEMA_SQL:
+        return
     with conn.cursor() as cur:
         cur.execute(SCHEMA_SQL)
     conn.commit()
@@ -47,6 +52,7 @@ def _normalize_row(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _dedupe_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Elimina filas duplicadas dentro del mismo lote que se está procesando
     dedup: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for r in rows:
         nr = _normalize_row(r)
@@ -161,6 +167,7 @@ def upsert_current_and_history(conn, rows: List[Dict[str, Any]]):
         prev_price_dec = _to_decimal(prev_price)
         prev_list_dec = _to_decimal(prev_list)
 
+        # Solo registramos cambios si los valores estrictos son distintos
         changed = (
             prev_price_dec != new_price or
             prev_list_dec != new_list or
