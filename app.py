@@ -4,7 +4,8 @@ import pathlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scraper import discover_configs, run_store
-
+from dotenv import load_dotenv
+load_dotenv()
 BASE_DIR = pathlib.Path(__file__).parent.resolve()
 
 

@@ -181,6 +181,9 @@ async def run_store(store_slug: str, module_name: str):
     conn = connect_db()
     try:
         ensure_schema(conn)
+        
+        seen_eans = set() # Memoria temporal para ignorar repetidos en esta corrida
+
         async with ClientSession(connector=TCPConnector(ssl=False), timeout=ClientTimeout(total=60)) as session:
             log(f'Iniciando extracción para {store_slug}', '🚀')
             tree = await get_category_tree(session, config)
@@ -208,7 +211,11 @@ async def run_store(store_slug: str, module_name: str):
                         for product in data:
                             parsed = parse_product(product, store_slug)
                             if parsed:
-                                batch.append(parsed)
+                                ean = parsed['ean']
+                                # Solo lo guardamos si no lo escaneamos antes en esta misma ejecución
+                                if ean not in seen_eans:
+                                    seen_eans.add(ean)
+                                    batch.append(parsed)
 
                         if batch:
                             result = upsert_current_and_history(conn, batch)
