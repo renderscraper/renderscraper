@@ -9,6 +9,7 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
 from db import connect_db, ensure_schema, upsert_current_and_history
 
+# Corrección para caracteres especiales en la consola de Windows
 if sys.platform == 'win32':
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -16,7 +17,8 @@ if sys.platform == 'win32':
     except AttributeError:
         pass
 
-MAX_CONCURRENCY = int(os.getenv('SCRAPER_MAX_CONCURRENCY', '6'))
+# Controlamos cuántas peticiones simultáneas hacemos para no saturar
+MAX_CONCURRENCY = int(os.getenv('SCRAPER_MAX_CONCURRENCY', '10'))
 SEM = asyncio.Semaphore(MAX_CONCURRENCY)
 
 
@@ -147,6 +149,7 @@ def parse_product(product: Dict[str, Any], store_slug: str) -> Optional[Dict[str
     price = safe_float(get_nested(product, 'items.0.sellers.0.commertialOffer.Price'))
     list_price = safe_float(get_nested(product, 'items.0.sellers.0.commertialOffer.ListPrice'))
     available_quantity = get_nested(product, 'items.0.sellers.0.commertialOffer.AvailableQuantity')
+    
     try:
         stock = 1 if available_quantity is not None and float(available_quantity) > 0 else 0
     except Exception:
@@ -182,7 +185,8 @@ async def run_store(store_slug: str, module_name: str):
     try:
         ensure_schema(conn)
         
-        seen_eans = set() # Memoria temporal para ignorar repetidos en esta corrida
+        # Memoria temporal para ignorar repetidos en esta ejecución
+        seen_eans = set() 
 
         async with ClientSession(connector=TCPConnector(ssl=False), timeout=ClientTimeout(total=60)) as session:
             log(f'Iniciando extracción para {store_slug}', '🚀')
@@ -193,15 +197,19 @@ async def run_store(store_slug: str, module_name: str):
             for category in categories:
                 cat_name = category.get('name', 'Desconocida')
                 log(f'Escaneando categoría: {cat_name}', '▶️')
+                
                 for _from in range(0, config.MAX_ITEMS, config.PAGE_SIZE):
                     _to = _from + config.PAGE_SIZE - 1
                     retries = 3
+                    
                     while retries > 0:
                         data = await fetch_batch(session, config, category, _from, _to)
+                        
                         if data == 'RETRY':
                             retries -= 1
                             await asyncio.sleep(2)
                             continue
+                            
                         if not data:
                             if _from == 0:
                                 log(f'Categoría vacía: {cat_name}', '👻')
@@ -212,7 +220,7 @@ async def run_store(store_slug: str, module_name: str):
                             parsed = parse_product(product, store_slug)
                             if parsed:
                                 ean = parsed['ean']
-                                # Solo lo guardamos si no lo escaneamos antes en esta misma ejecución
+                                # Validamos contra la memoria temporal
                                 if ean not in seen_eans:
                                     seen_eans.add(ean)
                                     batch.append(parsed)
@@ -221,8 +229,10 @@ async def run_store(store_slug: str, module_name: str):
                             result = upsert_current_and_history(conn, batch)
                             log(f"{cat_name} [{_from}-{_to}] -> actuales:{result['current_upserted']} historial:{result['history_inserted']}", '✅')
                         break
+                    
                     if not data:
                         break
+                        
             log(f'Proceso terminado para {store_slug}', '🏁')
     finally:
         conn.close()
