@@ -2,18 +2,17 @@ name: Robot Scraper LunaTec 24/7
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 0,23 * * *'
   workflow_dispatch:
 
 jobs:
   ejecutar-scraper:
     runs-on: ubuntu-latest
-    
+
     concurrency:
       group: scraper-unico
       cancel-in-progress: false
 
-    # Esto silencia la advertencia amarilla actualizando Node internamente
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
