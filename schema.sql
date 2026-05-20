@@ -1,17 +1,13 @@
--- Borramos las tablas viejas para liberar los 200MB
-DROP TABLE IF EXISTS price_history CASCADE;
-DROP TABLE IF EXISTS current_products CASCADE;
-DROP TABLE IF EXISTS catalogo_unificado CASCADE;
+-- Usamos IF NOT EXISTS para que solo las cree si faltan, sin borrar los datos existentes.
 
--- 1. Catálogo Maestro (Solo identificadores, CERO precios o stock)
-CREATE TABLE catalogo_unificado (
+CREATE TABLE IF NOT EXISTS catalogo_unificado (
     ean TEXT PRIMARY KEY,
     product_name TEXT,
-    brand TEXT
+    brand TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. Estado Actual (Vinculado al catálogo, guarda la "foto" del momento)
-CREATE TABLE current_products (
+CREATE TABLE IF NOT EXISTS current_products (
     store_slug TEXT NOT NULL,
     ean TEXT NOT NULL REFERENCES catalogo_unificado(ean),
     cat1 TEXT,
@@ -23,8 +19,7 @@ CREATE TABLE current_products (
     PRIMARY KEY (store_slug, ean)
 );
 
--- 3. Historial (Solo guarda cambios reales, sin registro "NEW")
-CREATE TABLE price_history (
+CREATE TABLE IF NOT EXISTS price_history (
     id BIGSERIAL PRIMARY KEY,
     store_slug TEXT NOT NULL,
     ean TEXT NOT NULL REFERENCES catalogo_unificado(ean),
@@ -33,10 +28,9 @@ CREATE TABLE price_history (
     captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_current_products_ean ON current_products (ean);
-CREATE INDEX idx_price_history_ean ON price_history (ean);
+CREATE INDEX IF NOT EXISTS idx_current_products_ean ON current_products (ean);
+CREATE INDEX IF NOT EXISTS idx_price_history_ean ON price_history (ean);
 
--- 4. La Vista para descargar todo junto fácilmente luego
 CREATE OR REPLACE VIEW vista_descarga_productos AS
 SELECT 
     c.ean, 
