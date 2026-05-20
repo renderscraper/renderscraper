@@ -220,8 +220,6 @@ async def run_store(store_slug: str, module_name: str):
                                     seen_eans.add(ean)
                                     batch.append(parsed)
 
-                        # Limpiamos la memoria RAM manualmente tras parsear la página
-                        del data
 
                         if batch:
                             result = upsert_current_and_history(conn, batch)
