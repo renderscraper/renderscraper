@@ -111,7 +111,10 @@ def extract_all_categories(tree, chain=None):
 async def fetch_batch(session, config, category, _from, _to):
     url, params = config.build_products_request(category, _from, _to)
     cat_name = category.get('name', 'Desconocida')
+    
     async with SEM:
+        # Micro-retraso para evitar bloqueos por rate-limit de VTEX
+        await asyncio.sleep(0.5)
         try:
             async with session.get(url, params=params, headers=config.HEADERS) as r:
                 if r.status in (200, 206):
@@ -147,7 +150,6 @@ def parse_product(product: Dict[str, Any], store_slug: str) -> Optional[Dict[str
         return None
 
     price = safe_float(get_nested(product, 'items.0.sellers.0.commertialOffer.Price'))
-    list_price = safe_float(get_nested(product, 'items.0.sellers.0.commertialOffer.ListPrice'))
     available_quantity = get_nested(product, 'items.0.sellers.0.commertialOffer.AvailableQuantity')
     
     try:
@@ -155,26 +157,19 @@ def parse_product(product: Dict[str, Any], store_slug: str) -> Optional[Dict[str
     except Exception:
         stock = 0
 
-    offer_pct = 0.0
-    if list_price is not None and price is not None and list_price > price and list_price > 0:
-        offer_pct = round(((list_price - price) / list_price) * 100, 2)
-
     categories = product.get('categories', [])
     cat_path = max(categories, key=lambda c: c.count('/')).strip('/').split('/') if categories else []
 
     return {
         'store_slug': store_slug,
         'ean': ean,
-        'product_id': clean_text(product.get('productId')),
         'product_name': clean_text(item.get('nameComplete') or product.get('productName')),
         'brand': clean_text(product.get('brand')),
         'cat1': clean_text(cat_path[0]) if len(cat_path) > 0 else None,
         'cat2': clean_text(cat_path[1]) if len(cat_path) > 1 else None,
         'cat3': clean_text(cat_path[2]) if len(cat_path) > 2 else None,
         'price': price,
-        'list_price': list_price,
-        'stock': stock,
-        'offer_pct': offer_pct,
+        'stock': stock
     }
 
 
@@ -224,6 +219,9 @@ async def run_store(store_slug: str, module_name: str):
                                 if ean not in seen_eans:
                                     seen_eans.add(ean)
                                     batch.append(parsed)
+
+                        # Limpiamos la memoria RAM manualmente tras parsear la página
+                        del data
 
                         if batch:
                             result = upsert_current_and_history(conn, batch)
