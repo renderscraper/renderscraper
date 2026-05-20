@@ -34,5 +34,5 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SCRAPER_MAX_CONCURRENCY: '10'
-        # ¡Corregido! Le quitamos la palabra "run" del final
-        run: python app.py run
+
+        run: python app.py
