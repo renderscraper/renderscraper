@@ -36,10 +36,10 @@ def _rows_to_map(rows):
     out = {}
     for row in rows:
         ean = str(row[0]).strip()
+        # Ahora solo extraemos precio y stock (list_price fue eliminado)
         out[ean] = {
             'price': row[1],
-            'list_price': row[2],
-            'stock': row[3]
+            'stock': row[2]
         }
     return out
 
@@ -52,7 +52,6 @@ def _normalize_row(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _dedupe_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # Elimina filas duplicadas dentro del mismo lote que se está procesando
     dedup: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for r in rows:
         nr = _normalize_row(r)
@@ -75,7 +74,7 @@ def fetch_existing_current(conn, store_slug: str, eans: List[str]):
     with conn.cursor() as cur:
         cur.execute(
             '''
-            SELECT ean, price, list_price, stock
+            SELECT ean, price, stock
             FROM current_products
             WHERE store_slug = %s AND ean = ANY(%s)
             ''',
@@ -89,7 +88,6 @@ def upsert_current_and_history(conn, rows: List[Dict[str, Any]]):
         return {'current_upserted': 0, 'history_inserted': 0}
 
     rows = _dedupe_rows(rows)
-
     if not rows:
         return {'current_upserted': 0, 'history_inserted': 0}
 
@@ -97,10 +95,10 @@ def upsert_current_and_history(conn, rows: List[Dict[str, Any]]):
     eans = [str(r['ean']).strip() for r in rows if str(r.get('ean', '')).strip()]
     existing = fetch_existing_current(conn, store_slug, eans)
 
+    catalog_values = []
     current_values = []
     history_values = []
 
-    # Helper para convertir de forma segura cualquier número a Decimal
     def _to_decimal(val):
         if val is None or val == '':
             return None
@@ -114,138 +112,86 @@ def upsert_current_and_history(conn, rows: List[Dict[str, Any]]):
         if not ean:
             continue
 
-        prev = existing.get(ean)
+        # 1. Alimentamos el catálogo unificado (sin stock ni precio)
+        catalog_values.append((
+            ean,
+            r.get('product_name'),
+            r.get('brand')
+        ))
 
+        new_price = _to_decimal(r.get('price'))
+        new_stock = r.get('stock')
+
+        # 2. Alimentamos la tabla de estados actuales
         current_values.append((
             r['store_slug'],
             ean,
-            r.get('product_id'),
-            r.get('product_name'),
-            r.get('brand'),
             r.get('cat1'),
             r.get('cat2'),
             r.get('cat3'),
-            r.get('price'),
-            r.get('list_price'),
-            r.get('stock'),
-            r.get('offer_pct')
+            new_price,
+            new_stock
         ))
 
-        if prev is None:
-            history_values.append((
-                r['store_slug'],
-                ean,
-                r.get('product_id'),
-                r.get('product_name'),
-                r.get('brand'),
-                r.get('cat1'),
-                r.get('cat2'),
-                r.get('cat3'),
-                r.get('price'),
-                r.get('list_price'),
-                r.get('stock'),
-                r.get('offer_pct'),
-                None,
-                None,
-                None,
-                None,
-                None,
-                'NEW'
-            ))
-            continue
+        # 3. Lógica del historial: Solo si hay cambios y si hay stock = 1
+        prev = existing.get(ean)
+        if prev is not None:
+            prev_price_dec = _to_decimal(prev['price'])
+            
+            if prev_price_dec != new_price and new_stock == 1:
+                history_values.append((
+                    r['store_slug'],
+                    ean,
+                    prev_price_dec,
+                    new_price
+                ))
 
-        prev_price = prev['price']
-        prev_list = prev['list_price']
-        prev_stock = prev['stock']
+    # Transacción SQL segura
+    with conn:
+        with conn.cursor() as cur:
+            if catalog_values:
+                execute_values(
+                    cur,
+                    '''
+                    INSERT INTO catalogo_unificado (ean, product_name, brand)
+                    VALUES %s
+                    ON CONFLICT (ean) DO NOTHING
+                    ''',
+                    catalog_values,
+                    page_size=500,
+                )
 
-        # Normalizamos los valores nuevos a Decimal
-        new_price = _to_decimal(r.get('price'))
-        new_list = _to_decimal(r.get('list_price'))
-        new_stock = r.get('stock')
-        
-        # Normalizamos los valores previos de PostgreSQL a Decimal de Python
-        prev_price_dec = _to_decimal(prev_price)
-        prev_list_dec = _to_decimal(prev_list)
+            if current_values:
+                execute_values(
+                    cur,
+                    '''
+                    INSERT INTO current_products
+                    (store_slug, ean, cat1, cat2, cat3, price, stock)
+                    VALUES %s
+                    ON CONFLICT (store_slug, ean) DO UPDATE SET
+                        cat1 = EXCLUDED.cat1,
+                        cat2 = EXCLUDED.cat2,
+                        cat3 = EXCLUDED.cat3,
+                        price = EXCLUDED.price,
+                        stock = EXCLUDED.stock,
+                        updated_at = NOW()
+                    ''',
+                    current_values,
+                    page_size=500,
+                )
 
-        # Solo registramos cambios si los valores estrictos son distintos
-        changed = (
-            prev_price_dec != new_price or
-            prev_list_dec != new_list or
-            prev_stock != new_stock
-        )
+            if history_values:
+                execute_values(
+                    cur,
+                    '''
+                    INSERT INTO price_history
+                    (store_slug, ean, previous_price, new_price)
+                    VALUES %s
+                    ''',
+                    history_values,
+                    page_size=500,
+                )
 
-        if changed:
-            delta_price = None
-            delta_pct = None
-
-            try:
-                if prev_price_dec is not None and new_price is not None:
-                    delta_price = new_price - prev_price_dec
-                    if prev_price_dec != Decimal('0'):
-                        delta_pct = (delta_price / prev_price_dec) * Decimal('100')
-            except Exception:
-                pass
-
-            history_values.append((
-                r['store_slug'],
-                ean,
-                r.get('product_id'),
-                r.get('product_name'),
-                r.get('brand'),
-                r.get('cat1'),
-                r.get('cat2'),
-                r.get('cat3'),
-                r.get('price'),
-                r.get('list_price'),
-                r.get('stock'),
-                r.get('offer_pct'),
-                prev_price,
-                prev_list,
-                prev_stock,
-                delta_price,
-                delta_pct,
-                'PRICE_CHANGE'
-            ))
-
-    with conn.cursor() as cur:
-        if current_values:
-            execute_values(
-                cur,
-                '''
-                INSERT INTO current_products
-                (store_slug, ean, product_id, product_name, brand, cat1, cat2, cat3, price, list_price, stock, offer_pct)
-                VALUES %s
-                ON CONFLICT (store_slug, ean) DO UPDATE SET
-                    product_id = EXCLUDED.product_id,
-                    product_name = EXCLUDED.product_name,
-                    brand = EXCLUDED.brand,
-                    cat1 = EXCLUDED.cat1,
-                    cat2 = EXCLUDED.cat2,
-                    cat3 = EXCLUDED.cat3,
-                    price = EXCLUDED.price,
-                    list_price = EXCLUDED.list_price,
-                    stock = EXCLUDED.stock,
-                    offer_pct = EXCLUDED.offer_pct,
-                    updated_at = NOW()
-                ''',
-                current_values,
-                page_size=500,
-            )
-
-        if history_values:
-            execute_values(
-                cur,
-                '''
-                INSERT INTO price_history
-                (store_slug, ean, product_id, product_name, brand, cat1, cat2, cat3, price, list_price, stock, offer_pct,
-                 previous_price, previous_list_price, previous_stock, delta_price, delta_pct, change_kind)
-                VALUES %s
-                ''',
-                history_values,
-                page_size=500,
-            )
-
-    conn.commit()
     return {
         'current_upserted': len(current_values),
         'history_inserted': len(history_values)
