@@ -113,8 +113,7 @@ async def fetch_batch(session, config, category, _from, _to):
     cat_name = category.get('name', 'Desconocida')
     
     async with SEM:
-        # Micro-retraso para evitar bloqueos por rate-limit de VTEX
-        await asyncio.sleep(0.5)
+       
         try:
             async with session.get(url, params=params, headers=config.HEADERS) as r:
                 if r.status in (200, 206):
