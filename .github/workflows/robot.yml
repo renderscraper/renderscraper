@@ -2,19 +2,20 @@ name: Robot Scraper LunaTec 24/7
 
 on:
   schedule:
-    # Esto significa "Ejecutar cada 4 horas". 
-    # El sistema arranca a las 00:00, 04:00, 08:00, 12:00, 16:00, 20:00.
     - cron: '0 */4 * * *'
-  workflow_dispatch: # Te permite darle al botón "Run" manualmente en la web de GitHub
+  workflow_dispatch:
 
 jobs:
   ejecutar-scraper:
     runs-on: ubuntu-latest
     
-    # Esto evita que dos robots choquen si uno tarda más de 4 horas
     concurrency:
       group: scraper-unico
       cancel-in-progress: false
+
+    # Esto silencia la advertencia amarilla actualizando Node internamente
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: 📥 Clonar el código
@@ -31,8 +32,7 @@ jobs:
 
       - name: 🚀 Ejecutar todas las plataformas
         env:
-          # Le pasamos la contraseña de Supabase desde los Secretos de GitHub
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          # Aumentamos la concurrencia para que sea muy rápido
           SCRAPER_MAX_CONCURRENCY: '10'
+        # ¡Corregido! Le quitamos la palabra "run" del final
         run: python app.py
