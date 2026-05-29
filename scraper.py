@@ -115,7 +115,7 @@ async def fetch_batch(session, config, category, _from, _to):
     async with SEM:
        
         try:
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.05)
             async with session.get(url, params=params, headers=config.HEADERS) as r:
                 if r.status in (200, 206):
                     try:
